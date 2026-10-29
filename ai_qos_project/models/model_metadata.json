@@ -1,0 +1,28 @@
+{
+  "feature_columns": [
+    "load_multiplier",
+    "arrival_rate_pps",
+    "queue_fill_proxy",
+    "voice_delay_ms",
+    "video_delay_ms",
+    "bg_delay_ms",
+    "voice_loss_pct",
+    "video_loss_pct",
+    "bg_loss_pct",
+    "voice_jitter_ms",
+    "video_jitter_ms",
+    "throughput_total_mbps"
+  ],
+  "label_column": "congestion_label",
+  "congestion_labels": [
+    "normal",
+    "moderate",
+    "severe"
+  ],
+  "n_estimators": 100,
+  "max_depth": 10,
+  "random_state": 42,
+  "train_accuracy": 1.0,
+  "test_accuracy": 1.0,
+  "dummy_accuracy": 0.3194
+}

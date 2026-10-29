@@ -1,0 +1,5 @@
+label,rf_precision,rf_recall,rf_f1,rf_support,dummy_precision,dummy_recall,dummy_f1
+normal,1.0,1.0,1.0,22.0,0.0,0.0,0.0
+moderate,1.0,1.0,1.0,27.0,0.0,0.0,0.0
+severe,1.0,1.0,1.0,23.0,0.3194,1.0,0.4842
+accuracy,1.0,1.0,1.0,72.0,0.3194,0.3194,0.3194
