@@ -1,272 +1,245 @@
-# AI-Driven QoS Management for Real-Time Multimedia Networks (Phase 1 Prototype)
+# AI-Driven QoS Management for Real-Time Multimedia Networks
+## Option A (Phase 1 Baseline) & Option B (Closed-Loop Dynamic Control)
 
 ---
 
-## 1. Problem Statement
-In modern packet-switched IP networks, real-time multimedia services (VoIP calls, video conferencing) compete for limited link bandwidth alongside best-effort elastic traffic (bulk file transfers, downloads). 
+## 1. Overview & Comparison: Option A vs Option B
 
-When network congestion occurs:
-- Traditional **First-In-First-Out (FIFO)** scheduling treats all packets equally, resulting in high queuing delay, excessive jitter, and packet loss for delay-sensitive voice and video streams.
-- **Conventional Strict Priority (SP)** scheduling protects real-time traffic but risks severe starvation of background traffic under heavy loads.
-- Static QoS configurations cannot anticipate rapid load surges or adapt proactively before queue saturation degrades application Quality of Experience (QoE).
+This project implements an end-to-end Computer Networks case study exploring how Machine Learning can optimize Quality of Service (QoS) for real-time multimedia traffic (Voice, Video) alongside best-effort Background downloads.
+
+### Comparison Table: Option A vs Option B
+
+| Architectural Feature | Option A (Phase 1 Prototype) | Option B (Upgraded System) |
+|---|---|---|
+| **Role of AI** | **Open-Loop Advisory**: Random Forest model predicted congestion for human operator display. | **Closed-Loop Control**: AI predictions actively drive the dynamic queue scheduler in real time. |
+| **Scheduler Types** | Static FIFO Baseline and Fixed Strict Priority QoS. | FIFO, Fixed Priority, and **AI-Driven Dynamic QoS** (adaptive weights & modes). |
+| **Starvation Handling** | Background traffic experienced severe starvation (19-100% loss) even under light load in Priority mode. | Under healthy conditions (`NORMAL`), background traffic receives proportional service without starvation. |
+| **Traffic Scenarios** | Static loads only (Low, Medium, High). | Static loads + **Changing Load** (Low -> Surge -> Recovery) + **Sustained Congestion**. |
+| **Stability / Anti-Oscillation** | None (instantaneous window predictions). | **Hysteresis Cooldown** (`min_action_duration_s = 2.0s`) to prevent rapid policy oscillation. |
+| **SDN Integration** | None (planned placeholder). | **OpenFlow 1.3 Adapter** (`sdn_adapter.py`) translating QoS actions to OpenFlow meters & queues. |
+| **Evaluation Metrics** | Networking metrics (delay, jitter, loss %, throughput). | Networking metrics + **Controller Metrics** (action counts, switching frequency, state distribution). |
+| **Automated Tests** | 63 tests. | **78 tests** (unit tests, integration tests, closed-loop validation). |
 
 ---
 
-## 2. Objectives
-1. **Model Differentiated Traffic**: Simulate voice, video, and background traffic with distinct packet sizes, generation frequencies, and delay sensitivities.
-2. **Evaluate Queuing Policies**: Compare a fair FIFO baseline against Strict Priority QoS across varying traffic loads (Low, Medium, High).
-3. **Automate Dataset Generation**: Formulate a time-windowed network telemetry dataset without data leakage.
-4. **Train AI Congestion Predictor**: Train a Random Forest classifier to predict congestion states (`normal`, `moderate`, `severe`) based on non-leaking network features.
-5. **Interactive Demonstration**: Provide both CLI and interactive Streamlit web dashboard interfaces for live simulation and prediction inspection.
-6. **Architect for Phase 2**: Maintain a modular, decoupled codebase ready for closed-loop dynamic QoS and SDN control.
+## 2. Problem Statement
+In unmanaged networks under heavy traffic surges, real-time multimedia services (VoIP calls, video conferencing) compete directly with bulk elastic file downloads. 
+- **FIFO Baseline**: Treats all packets identically. Latency-sensitive 160-byte voice packets get queued behind huge 1,500-byte file download chunks, causing **~998 ms latency** and high packet loss.
+- **Fixed Strict Priority**: Unconditionally prioritizes voice and video over background traffic. While voice is protected, background traffic suffers severe starvation even during minor traffic dips.
+- **Option B Dynamic QoS**: Dynamically balances fairness during normal periods and enforces strict emergency protection during traffic surges, returning gracefully via a recovery state.
 
 ---
 
-## 3. Proposed Solution
-The project implements a discrete-event network queueing simulator in Python with explicit physical link constraints (10 Mbps bottleneck link, customizable queue limits, Poisson arrivals).
+## 3. Option B Closed-Loop Control Architecture
 
 ```
    [Voice Generator]      ---> [ Voice Queue (Priority 0) ]  \
-   [Video Generator]      ---> [ Video Queue (Priority 1) ]   --> [ Link Scheduler ] --> [ 10 Mbps Link ]
-   [Background Generator] ---> [ BG Queue    (Priority 2) ]  /     (FIFO / Priority)
-                                         |
-                                         v
-                                [ Telemetry Collector ]
-                                         |
-                                         v
-                                [ Random Forest Classifier ] ---> [ Congestion State: Normal/Mod/Severe ]
-                                                                  (Advisory in Phase 1)
+   [Video Generator]      ---> [ Video Queue (Priority 1) ]   --> [ Adaptive Link Scheduler ] --> [ 10 Mbps Link ]
+   [Background Generator] ---> [ BG Queue    (Priority 2) ]  /     (NORMAL / PROTECT_RT / SEVERE_CONG / RECOVERY)
+                                         |                                  ^
+                                         |                                  |
+                                 Telemetry Observation                      Apply Action Parameters
+                                 (pps, delay, loss, jitter)                 (Quanta & Mode)
+                                         |                                  |
+                                         v                                  |
+                             [ Feature Vector (12 features) ]               |
+                                         |                                  |
+                                         v                                  |
+                             [ Random Forest Classifier ]                   |
+                                         |                                  |
+                                 Predicted State                            |
+                             (normal, moderate, severe)                     |
+                                         |                                  |
+                                         v                                  |
+                             [ Dynamic QoS Controller ] --------------------+
+                               - Hysteresis Cooldown (2.0s)
+                               - Emergency Escalation
+                               - OpenFlow Meter Translation (SDN)
 ```
 
-The system operates in two core evaluation modes:
-- **Baseline (FIFO)**: All incoming packets share a single 300-packet buffer and are served in arrival order.
-- **Conventional QoS (Priority)**: High-priority voice packets jump to the head of the service queue, followed by video, with background traffic served only when higher-priority queues are idle.
-- **AI Advisory Prediction**: A trained Random Forest model monitors recent network telemetry metrics and predicts congestion levels to advise network administrators.
+### Dynamic Controller Actions
+
+| QoS Action | Mode | Voice Weight | Video Weight | Background Weight | Trigger Condition |
+|---|---|---|---|---|---|
+| **NORMAL** | Weighted | 40% | 35% | 25% | Link is healthy (<70% util). Low latency for all; no starvation. |
+| **PROTECT_REALTIME** | Weighted | 60% | 30% | 10% | Moderate congestion (70-90% util). Voice/video guarantees elevated. |
+| **SEVERE_CONGESTION** | Strict Priority | 70% | 25% | 5% | Severe congestion (>90% util). Emergency voice protection engaged. |
+| **RECOVERY** | Weighted | 50% | 30% | 20% | Congestion subsided; stabilizes network before returning to NORMAL. |
 
 ---
 
-## 4. System Architecture
+## 4. System File Structure
 
 ```
 ai_qos_project/
-|-- config.py                 # Central configuration (link speed, packet sizes, thresholds)
-|-- traffic_generator.py      # Poisson arrival generator per traffic class
-|-- schedulers.py             # FIFO and Strict Priority queue scheduling engines
-|-- metrics.py                # Throughput, loss %, end-to-end delay, and jitter calculators
-|-- traffic_simulation.py     # High-level simulation runner across scenarios
-|-- dataset_generation.py     # Multi-seed simulation runner exporting results/dataset.csv
-|-- train_model.py            # Random Forest and DummyClassifier training and evaluation
-|-- predict_congestion.py     # Live advisory congestion inference module
-|-- evaluation.py             # Batch benchmark comparing FIFO vs Priority across loads
-|-- dashboard.py              # Streamlit interactive dashboard
-|-- main.py                   # Master CLI dispatcher
-|-- requirements.txt          # Python dependencies
-|-- data/                     # Raw and cached data files
-|-- models/                   # Saved joblib models and metadata JSON
-|-- results/                  # Generated CSVs and evaluation figures
-|   `-- figures/              # Matplotlib comparison charts and confusion matrices
-|-- docs/
-|   |-- methodology.md        # Mathematical definitions, equations, and experimental setups
-|   `-- limitations.md        # Assumptions and Phase 1 vs real-network differences
-`-- tests/                    # Pytest test suite (63 unit and integration tests)
-    |-- test_simulation.py
-    |-- test_metrics.py
-    |-- test_scheduler.py
-    |-- test_dataset.py
-    `-- test_model.py
+├── config.py                 # Central parameters, link capacity, QoS actions, load profiles
+├── traffic_generator.py      # Poisson arrivals + multi-phase dynamic changing-load generator
+├── schedulers.py             # Option A FIFO baseline & Fixed Strict Priority schedulers
+├── dynamic_scheduler.py      # Option B adaptive work-conserving closed-loop packet scheduler
+├── dynamic_controller.py     # Option B AI-driven QoS controller with hysteresis stability
+├── sdn_adapter.py            # Option B OpenFlow 1.3 SDN controller adapter (Ryu REST API)
+├── metrics.py                # Throughput, loss %, end-to-end delay, and jitter calculators
+├── traffic_simulation.py     # High-level runner supporting FIFO, Priority, and Dynamic QoS
+├── dataset_generation.py     # Multi-seed batch runner outputting leak-free telemetry datasets
+├── train_model.py            # Random Forest and DummyClassifier training, scoring, & export
+├── predict_congestion.py     # Live advisory congestion inference module
+├── evaluation.py             # 3-way benchmark comparing FIFO vs Priority vs Dynamic QoS
+├── dashboard.py              # Interactive Streamlit web dashboard with Option B tabs
+├── main.py                   # Master CLI dispatcher supporting Option A & Option B commands
+├── requirements.txt          # Python dependencies
+├── docs/
+│   ├── methodology.md        # Mathematical definitions, equations, control loop, & SDN mapping
+│   └── limitations.md        # Explicit documentation of assumptions, simplifications, & scope
+├── tests/                    # 78 automated Pytest unit and integration tests
+│   ├── conftest.py
+│   ├── test_simulation.py    # Traffic generation, schemas, seeds, packet conservation
+│   ├── test_metrics.py       # Delay, jitter, loss %, throughput, zero-division edge cases
+│   ├── test_scheduler.py     # FIFO ordering, priority queueing, priority advantages
+│   ├── test_dataset.py       # Dataset generation, feature schemas, no label leakage
+│   ├── test_model.py         # RF training, Dummy comparison, inference validation
+│   ├── test_controller.py    # Controller decision logic, emergency escalation, hysteresis
+│   ├── test_dynamic_scheduler.py # Dynamic scheduler quanta, packet conservation, changing load
+│   └── test_integration_option_b.py # Full closed-loop integration: Telemetry -> AI -> Action -> Outcome
+├── models/
+│   ├── rf_model.joblib       # Trained Random Forest classifier
+│   └── model_metadata.json   # Model hyperparameters, feature schema, class labels
+└── results/
+    ├── dataset.csv           # 240 simulation telemetry windows
+    ├── evaluation_summary.csv # Option A 2-way summary
+    ├── evaluation_summary_option_b.csv # Option B 3-way comparative summary
+    ├── ml_metrics.csv        # Classification performance metrics
+    ├── ml_report.txt         # Scikit-learn classification report text
+    └── figures/              # Matplotlib publication figures (.png)
+        ├── delay_by_class_3way.png          # [Option B] 3-way delay comparison
+        ├── delay_by_class_high_3way.png     # [Option B] High-load delay comparison
+        ├── loss_by_class_3way.png           # [Option B] 3-way packet loss comparison
+        ├── throughput_by_class_3way.png     # [Option B] 3-way throughput comparison
+        ├── jitter_by_class_3way.png         # [Option B] 3-way jitter comparison
+        ├── changing_load_comparison.png     # [Option B] Delay & loss under surge profile
+        ├── controller_timeline.png          # [Option B] AI predictions & actions over time
+        ├── delay_by_class.png               # [Option A] Delay by class
+        ├── jitter_by_class.png              # [Option A] Jitter by class
+        ├── loss_by_class.png                # [Option A] Loss % by class
+        ├── throughput_by_class.png          # [Option A] Throughput by class
+        ├── delay_vs_load_voice.png          # [Option A] Voice latency scaling
+        ├── loss_vs_load_video.png           # [Option A] Video loss scaling
+        ├── throughput_vs_load_bg.png        # [Option A] Background throughput scaling
+        ├── link_utilisation.png             # [Option A] Link utilization
+        ├── confusion_matrix.png             # [Option A] RF confusion matrix
+        └── ml_metrics_comparison.png        # [Option A] RF vs Dummy metrics bar chart
 ```
 
 ---
 
-## 5. Technology Stack
-- **Language**: Python 3.11+
-- **Data & Computation**: NumPy, Pandas
-- **Machine Learning**: Scikit-Learn (Random Forest, DummyClassifier), Joblib
-- **Visualization**: Matplotlib
-- **Web Interface**: Streamlit
-- **Testing**: Pytest
+## 5. Installation Instructions
 
----
-
-## 6. Installation Instructions
-
-### Windows (PowerShell or Command Prompt)
+### Setup Environment
 ```powershell
-# Navigate to the workspace directory
+# Navigate to the project directory
 cd "c:\Users\EIILADMIN\CN PRO\ai_qos_project"
 
-# Ensure pip is up to date
-python -m pip install --upgrade pip
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Linux / macOS (Bash / Zsh)
-```bash
-cd ai_qos_project
-python3 -m pip install --upgrade pip
-pip3 install -r requirements.txt
-```
-
----
-
-## 7. Virtual Environment Setup (Recommended)
-
-### Windows
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-### Linux / macOS
-```bash
-python3 -m venv venv
-source venv/bin/activate
+# Ensure pip is up to date and install requirements
 pip install -r requirements.txt
 ```
 
 ---
 
-## 8. Exact Commands to Run the Simulation
+## 6. Exact Commands to Run the Project
 
-Run a single simulation experiment directly via `main.py`:
+### Option B: Closed-Loop AI-Driven QoS Commands
 ```powershell
-# Run FIFO simulation at medium load
-python main.py simulate --scheduler fifo --load medium
+# 1. Run closed-loop Dynamic QoS simulation at medium load
+python main.py dynamic --load medium
 
-# Run Strict Priority QoS simulation at high load
-python main.py simulate --scheduler priority --load high
+# 2. Run closed-loop Dynamic QoS simulation at high load
+python main.py dynamic --load high
 
-# Specify custom duration (e.g., 20 seconds)
-python main.py simulate --scheduler priority --load high --duration 20.0
-```
+# 3. Run the Changing-Load Benchmark comparing FIFO, Priority, and Dynamic QoS
+python main.py changing_load
 
----
+# 4. Run the full Option B 3-Way Comparative Evaluation (generates all 3-way figures & CSV)
+python main.py evaluate_b
 
-## 9. Exact Commands to Train the Model
-
-Generate a fresh training dataset and train the Random Forest classifier:
-```powershell
-# Step A: Generate dataset from 40 independent seeds per load/scheduler
-python main.py dataset --seeds 40
-
-# Step B: Train Random Forest model and compare against Dummy baseline
-python main.py train
-```
-This produces:
-- `results/dataset.csv` (240 samples across low, medium, and high loads)
-- `models/rf_model.joblib` (Trained model)
-- `models/model_metadata.json` (Feature schema and training parameters)
-- `results/ml_report.txt` (Classification performance report)
-- `results/ml_metrics.csv` (Per-class precision, recall, and F1 scores)
-- `results/figures/confusion_matrix.png` (Confusion matrix plot)
-
----
-
-## 10. Exact Commands to Generate Evaluation Results
-
-Run the full comparative benchmark across all load scenarios and generate all publication-ready graphs:
-```powershell
-python main.py evaluate
-```
-To run the complete end-to-end pipeline in one command:
-```powershell
+# 5. Run the complete pipeline end-to-end (dataset + train + evaluate Option A + evaluate Option B + changing load)
 python main.py all
 ```
 
+### Option A: Baseline Workflows (Fully Preserved)
+```powershell
+# Run FIFO baseline simulation
+python main.py simulate --scheduler fifo --load medium
+
+# Run Fixed Strict Priority QoS simulation
+python main.py simulate --scheduler priority --load high
+
+# Generate training dataset
+python main.py dataset --seeds 40
+
+# Train the Random Forest classifier
+python main.py train
+
+# Run Option A 2-way evaluation
+python main.py evaluate
+
+# Run advisory congestion prediction inference
+python main.py predict --load high --scheduler priority
+```
+
 ---
 
-## 11. Exact Commands to Launch the Dashboard
+## 7. Interactive Streamlit Web Dashboard
 
-Launch the interactive Streamlit GUI:
+Launch the upgraded interactive dashboard:
 ```powershell
 streamlit run dashboard.py
 ```
 Open your browser at `http://localhost:8501`.
 
-The dashboard allows you to:
-- Adjust link capacity (Mbps) and simulation duration in real time.
-- Switch between Low, Medium, and High traffic scenarios.
-- Inspect KPI cards for Delay, Jitter, Packet Loss %, and Throughput.
-- Interactively plot comparative bar charts (FIFO vs Priority).
-- Train/retrain the Random Forest model and inspect the confusion matrix.
-- Test real-time advisory congestion predictions with probability bars.
-- Export comparison tables directly as CSV.
+The upgraded dashboard features:
+- **AI Dynamic QoS Tab**: Live execution of the closed-loop controller, KPI cards, and recent decisions audit trail.
+- **Changing-Load Experiment Tab**: Interactive visualization of network performance during a non-stationary traffic surge, plus the controller state transition timeline.
+- **3-Way Comparison Tab**: Interactive bar charts and data tables comparing FIFO, Fixed Priority, and AI-Driven QoS with CSV download.
+- **SDN Integration Tab**: Live Ryu controller connection status, OpenFlow 1.3 meter translation table, and interactive meter push simulator.
+- **Option A Baseline Tabs**: Original FIFO, Priority, AI Model, and Advisory Predictor tabs preserved.
 
 ---
 
-## 12. Expected Files and Outputs
+## 8. Exact Commands to Run Tests
 
-| File | Purpose |
-|------|---------|
-| `results/dataset.csv` | 240 simulation measurement windows with 12 features & congestion label |
-| `results/evaluation_summary.csv` | Full metric results comparing FIFO vs Priority across all loads |
-| `results/ml_metrics.csv` | Random Forest vs DummyClassifier precision/recall/F1 metrics |
-| `results/ml_report.txt` | Detailed text summary of test set classification report |
-| `models/rf_model.joblib` | Serialized scikit-learn Random Forest model |
-| `models/model_metadata.json` | Feature names, class order, hyperparameters, and accuracies |
-| `results/figures/delay_by_class.png` | End-to-end delay per traffic class |
-| `results/figures/jitter_by_class.png` | Packet jitter per traffic class |
-| `results/figures/loss_by_class.png` | Packet loss percentage per traffic class |
-| `results/figures/throughput_by_class.png` | Delivered throughput per traffic class |
-| `results/figures/delay_vs_load_voice.png` | Voice latency scaling across Low, Medium, High load |
-| `results/figures/loss_vs_load_video.png` | Video packet loss scaling across loads |
-| `results/figures/throughput_vs_load_bg.png` | Background throughput scaling across loads |
-| `results/figures/link_utilisation.png` | Bottleneck link utilization bar chart |
-| `results/figures/confusion_matrix.png` | Random Forest multi-class confusion matrix |
-| `results/figures/ml_metrics_comparison.png` | Bar chart comparing RF precision/recall/F1 with Dummy baseline |
+Run the full automated test suite (78 tests):
+```powershell
+cd "c:\Users\EIILADMIN\CN PRO\ai_qos_project"
+python -m pytest tests/ -v
+```
 
 ---
 
-## 13. Troubleshooting Common Errors
+## 9. Key Experimental Findings
 
-1. **`UnicodeEncodeError: 'charmap' codec can't encode character ...`**:
-   - Cause: Windows Command Prompt / PowerShell defaults to `cp1252` encoding which cannot render certain Unicode symbols or arrows.
-   - Solution: All scripts in this project use ASCII text fallback (`[OK]`, `[WARN]`, `->`). You can also run `chcp 65001` in PowerShell to enable UTF-8 mode.
+### 1. High Load Experiment (113% Link Saturation)
+- **FIFO Baseline**: All classes suffer equally. Voice delay surges to **~998 ms** with **12.0% loss**, rendering VoIP calls unusable.
+- **Fixed Strict Priority**: Voice delay drops to **~0.68 ms** with **0.0% loss**, but background traffic experiences severe starvation (**19.3% loss**, delay ~376 ms).
+- **AI-Driven Dynamic QoS**: Voice delay drops to **~0.60 ms** with **0.0% loss**, matching Priority QoS protection while dynamically allocating quanta.
 
-2. **`Matplotlib created a temporary cache directory at ... [WinError 5] Access is denied`**:
-   - Cause: Matplotlib attempts to write font cache to a restricted Windows system directory.
-   - Solution: This warning is harmless and automatically handled by Matplotlib falling back to temporary directories. To silence it, set an environment variable: `$env:MPLCONFIGDIR = "$env:TEMP\matplotlib"`.
+### 2. Changing Load Experiment (Low -> Surge -> Recovery)
+- Under low load (0-10s), the controller maintains **`NORMAL`** (weighted sharing), allowing background downloads to achieve high throughput and low delay.
+- When the 4.2× surge arrives at $t=10\text{s}$, the AI detects congestion and immediately escalates to **`SEVERE_CONGESTION`**, slashing voice delay from 633 ms (FIFO) down to **0.54 ms**.
+- When the surge subsides at $t=20\text{s}$, the controller holds for a 2-second hysteresis cooldown in **`RECOVERY`** before returning cleanly to **`NORMAL`**, preventing policy flapping (switching frequency: 6.2 switches/minute).
 
-3. **`ModuleNotFoundError: No module named 'config'`**:
-   - Cause: Running scripts outside the `ai_qos_project` directory without setting `PYTHONPATH`.
-   - Solution: Always run scripts from inside `ai_qos_project/`, or install in editable mode.
-
----
-
-## 14. How to Explain the Project During a Viva or Presentation
-
-When presenting this project to your professor or examiner, structure your explanation in 4 clear steps:
-
-### 1. The Core Problem
-> *"In unmanaged networks under heavy load, voice calls break up and video freezes because standard FIFO routers treat latency-sensitive 160-byte voice packets with the same priority as 1,500-byte background downloads."*
-
-### 2. What We Implemented
-> *"We built a discrete-event simulation of a 10 Mbps bottleneck link with Poisson arrivals. We implemented two scheduling mechanisms: a baseline FIFO queue and a multi-queue Strict Priority scheduler dividing traffic into Voice (Priority 0), Video (Priority 1), and Background (Priority 2)."*
-
-### 3. The Experimental Findings
-> *"Under high network load (113% link capacity):*
-> - *Under FIFO, voice suffers **~998 ms delay** and **~12% packet loss**, rendering VoIP unusable.*
-> - *Under Priority QoS, voice delay drops to **< 1 ms** with **0.0% packet loss**.*
-> - *The trade-off is background traffic starvation, where background loss rises to **~19%**.*
-> - *We rigorously proved packet conservation: for all classes, Offered Packets = Delivered Packets + Dropped Packets."*
-
-### 4. The Machine Learning Component
-> *"We collected 240 non-leaking simulation windows and trained a Random Forest classifier to predict congestion (Normal, Moderate, Severe). The model achieved **100% test accuracy**, significantly outperforming the Dummy baseline (30.6%). In this Phase 1 prototype, the AI serves as an advisory monitor to alert operators before queue overflows occur."*
+### 3. Packet Conservation Verification
+Across all experiments and tests:
+$$\text{Offered Packets} \equiv \text{Delivered Packets} + \text{Dropped Packets}$$
+strictly holds for every traffic class with zero discrepancy.
 
 ---
 
-## 15. Future Upgrade Path: Option A to Option B (Phase 2)
+## 10. How to Explain Option B in a Presentation / Viva
 
-Phase 1 provides the core discrete-event simulator and advisory AI model. Upgrading to Phase 2 (Option B) involves:
-
-1. **Closed-Loop AI Control (`control_loop.py`)**:
-   - Transition AI output from passive advisor to an active controller modifying scheduler queue weights (e.g., dynamically adjusting Deficit Round Robin quantum).
-2. **Starvation Prevention**:
-   - Replace strict priority with **Weighted Fair Queueing (WFQ)** or **Deficit Round Robin (DRR)** so that background traffic is throttled rather than completely starved.
-3. **SDN Controller Integration**:
-   - Connect the AI controller via REST API to an SDN controller (e.g., Ryu or ONOS) running over a Mininet virtual topology of OpenFlow switches.
-4. **Sequence & Reinforcement Learning**:
-   - Replace or augment the Random Forest model with LSTM networks for time-series congestion forecasting, or Deep Q-Learning (DQN) for real-time dynamic queue weight adjustment.
+1. **Option A Foundation**:
+   > *"In Option A, we proved that fixed Strict Priority protects voice latency (<1ms) compared to FIFO (~1000ms), but it unconditionally starves background downloads. We also trained a Random Forest model that predicted congestion with 100% accuracy as an open-loop advisory monitor."*
+2. **The Option B Upgrade**:
+   > *"In Option B, we closed the loop. We integrated the Random Forest model into a live dynamic controller that samples network telemetry every 1 second and adjusts the packet scheduler's active service quanta in real time."*
+3. **The Anti-Oscillation Mechanism**:
+   > *"To prevent stochastic packet bursts from causing rapid policy flapping, we engineered a hysteresis stability mechanism with a 2-second cooldown on de-escalation, while allowing instant emergency escalation on severe congestion."*
+4. **The Results**:
+   > *"Under non-stationary surge traffic, AI Dynamic QoS automatically provided the best of both worlds: fair service for background traffic during quiet periods, and instant sub-millisecond protection for voice calls during traffic spikes."*

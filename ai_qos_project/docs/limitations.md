@@ -1,63 +1,57 @@
-# Simulation Limitations and Assumptions
+# Simulation Limitations and Assumptions (Option A & Option B)
 
 ## 1. Overview and Context
-This project implements **Phase 1 (Option A)** of the "AI-Driven QoS Management for Real-Time Multimedia Networks" prototype. It is a discrete-event, single-node queueing simulator implemented purely in Python.
+This project implements the upgraded **Option B (Closed-Loop Dynamic QoS Management)** architecture building directly on top of the Option A prototype.
 
-All metrics and findings generated in this project represent **simulated behavior** under explicit mathematical and queueing models. They do not constitute experimental data collected from hardware switches or live networks.
+All metrics and findings generated in this project represent **simulated behavior** under explicit mathematical and queueing models. They do not constitute experimental measurements from hardware switches or live networks.
 
 ---
 
-## 2. Simplifications in the Traffic Model
+## 2. Upgrades Implemented in Option B
 
-1. **Poisson Arrival Process**:
-   - In real-world multimedia streaming and VoIP, traffic exhibits burstiness, self-similarity, and variable packet generation intervals (e.g., silence suppression in voice, I/P/B-frame sizing in H.264/H.265 video).
-   - The simulation models packet arrivals as a memoryless Poisson process with exponentially distributed inter-arrival times, which is standard for introductory queueing theory (M/D/1 or M/M/1 approximations) but does not capture long-range dependence.
+Option B directly resolved several core limitations of Option A:
+1. **From Open-Loop Advisory to Closed-Loop Control**:
+   - In Option A, predictions were purely informational text outputs.
+   - In Option B, predictions from the Random Forest model directly feed into the `DynamicQoSController`, which alters the active queue service weights and scheduling mode of subsequent packets at 1-second intervals.
+2. **Mitigating Background Traffic Starvation**:
+   - In Option A, Strict Priority permanently prioritized voice and video, resulting in severe background traffic starvation even when network conditions were healthy.
+   - In Option B, the `NORMAL` action enforces weighted proportional sharing (Voice: 40%, Video: 35%, Background: 25%), ensuring low latency and zero unnecessary drops for background traffic during non-congested periods.
+3. **Dynamic Response to Non-Stationary Surges**:
+   - Option B introduces changing-load profiles (Low -> Surge -> Recovery) to evaluate the controller's ability to escalate to `SEVERE_CONGESTION` and return through `RECOVERY` with hysteresis stability.
+4. **SDN Adapter Boundary**:
+   - A dedicated `sdn_adapter.py` maps QoS actions into OpenFlow 1.3 meters and queues, providing a clean integration boundary for external SDN controllers (Ryu / ONOS).
 
-2. **Fixed Packet Sizes**:
-   - Each traffic class uses a static payload size:
-     - Voice: 160 Bytes (typical G.711 chunk)
-     - Video: 1,200 Bytes (approximate MTU-constrained video fragment)
-     - Background: 1,500 Bytes (standard Ethernet MSS/MTU)
-   - Real-world networks handle dynamic packet size distributions across flows.
+---
 
-3. **Absence of Closed-Loop Transport Control**:
+## 3. Remaining Limitations and Physical Simplifications
+
+While Option B establishes a functional closed-loop control system, several physical network simplifications remain:
+
+1. **Memoryless Arrival Model (Poisson Arrivals)**:
+   - In real-world multimedia streaming, traffic exhibits burstiness, self-similarity, and variable packet generation intervals (e.g., silence suppression in voice, I/P/B-frame sizing in H.264/H.265 video).
+   - The simulation models packet arrivals as a Poisson process with exponentially distributed inter-arrival times. While standard for queueing theory (M/D/1), it does not capture long-range dependence.
+
+2. **Absence of Closed-Loop Transport Protocols (TCP Dynamics)**:
    - Background file transfers are modelled as an open-loop arrival process without TCP congestion control (no TCP Reno/Cubic/BBR windowing, slow start, or exponential backoff).
    - Dropped packets in this simulation are not retransmitted. In real networks, TCP retransmissions would cause secondary queuing waves and goodput degradation.
 
----
-
-## 3. Network and Queueing Simplifications
-
-1. **Single Bottleneck Link Topology**:
+3. **Single Bottleneck Link Topology**:
    - The model simulates a single-hop transmission queue leading to a 10 Mbps bottleneck link.
    - Real networks feature multi-hop topologies, propagation delays, routing variations, cross-traffic at intermediate nodes, and bufferbloat in access routers.
 
-2. **Propagation and Processing Delay Omission**:
-   - The simulator assumes propagation delay is negligible ($0 \text{ ms}$) and router switching latency is instantaneous.
-   - End-to-end delay in this model consists solely of queueing delay plus packet serialization (transmission) time.
-
-3. **Strict Priority Starvation**:
-   - Strict Priority (SP) scheduling serves voice and video ahead of background traffic unconditionally.
-   - Under sustained heavy load, low-priority queues experience complete starvation (100% loss). Real-world implementations commonly use Deficit Round Robin (DRR), Weighted Fair Queueing (WFQ), or Low Latency Queueing (LLQ) with rate policers to prevent starvation.
-
----
-
-## 4. Machine Learning & Advisory Role Scope
-
-1. **Advisory (Open-Loop) AI in Phase 1**:
-   - The Random Forest classifier predicts whether the current network state is `normal`, `moderate`, or `severe`.
-   - In Phase 1, this prediction is purely informational (advisory). It does not dynamically adjust queue weights, rate limits, or packet drop probabilities in a closed feedback loop.
-   - Closed-loop dynamic QoS control is explicitly reserved for **Phase 2 (Option B)**.
-
-2. **Synthetic Data Bias**:
-   - The classifier was trained and evaluated on synthetic data generated by the simulator itself.
+4. **Synthetic Data Bias**:
+   - The Random Forest classifier was trained on synthetic data generated by the simulator itself.
    - Real network telemetry exhibits noise, missing packet records, delayed reporting windows, and out-of-order samples not present in synthetic datasets.
 
+5. **SDN Environment Limitations**:
+   - The Windows host environment does not natively support Mininet kernel network namespaces or Linux Open vSwitch kernel modules.
+   - Consequently, the SDN integration operates via `sdn_adapter.py` in **Simulated SDN Mode**, validating OpenFlow 1.3 payloads without requiring a live Linux virtual switch.
+
 ---
 
-## 5. Upgrade Path to Address Limitations
+## 4. Future Work & Option C Roadmap
 
-In **Phase 2 (Option B)**, these limitations will be addressed by:
-- Replacing the static scheduler with an adaptive QoS controller that consumes real-time AI predictions.
-- Implementing Weighted Deficit Round Robin (WDRR) to prevent background traffic starvation.
-- Integrating with Mininet and Ryu SDN controllers to test against real Linux network stacks and OpenFlow switches.
+Future development beyond Option B can focus on:
+- Deploying the controller within a Linux/Mininet virtual network with Open vSwitch kernel datapath.
+- Implementing Deep Reinforcement Learning (DQN or PPO) to optimize queue service weights dynamically rather than using discrete threshold rules.
+- Integrating real packet video traces (e.g., H.264 video trace libraries) to evaluate bursty VBR video streams.

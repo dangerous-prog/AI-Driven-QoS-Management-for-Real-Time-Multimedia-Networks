@@ -93,3 +93,57 @@ def offered_load_mbps(
 def total_packets(arrivals: dict[str, list[dict]]) -> int:
     """Return total number of offered packets across all classes."""
     return sum(len(v) for v in arrivals.values())
+
+
+def generate_dynamic_arrivals(
+    profile: list[tuple[float, float, float, str]] | None = None,
+    seed: int = RANDOM_SEED,
+) -> dict[str, list[dict]]:
+    """
+    Generate packet arrivals across multiple time phases with changing load multipliers.
+
+    Parameters
+    ----------
+    profile : list of (start_s, end_s, load_multiplier, label) tuples.
+              Defaults to config.CHANGING_LOAD_PROFILE if None.
+    seed    : random seed for reproducibility.
+
+    Returns
+    -------
+    dict mapping traffic-class name -> time-sorted list of packet dicts
+    """
+    import config
+    if profile is None:
+        profile = config.CHANGING_LOAD_PROFILE
+
+    rng = np.random.RandomState(seed)
+    arrivals: dict[str, list[dict]] = {cls: [] for cls in TRAFFIC_CLASSES}
+
+    for phase_idx, (start_s, end_s, multiplier, label) in enumerate(profile):
+        phase_dur = end_s - start_s
+        if phase_dur <= 0:
+            continue
+        phase_seed = (seed + phase_idx * 101) % (2**31)
+        phase_rng = np.random.RandomState(phase_seed)
+
+        for cls_name, cfg in TRAFFIC_CLASSES.items():
+            lam = cfg["base_arrival_rate"] * multiplier
+            n_est = int(lam * phase_dur * 3) + 100
+            inter_arrivals = phase_rng.exponential(scale=1.0 / lam, size=n_est)
+            times = np.cumsum(inter_arrivals)
+            times = times[times < phase_dur] + start_s
+
+            for t in times:
+                arrivals[cls_name].append({
+                    "class": cls_name,
+                    "size_bytes": cfg["packet_size_bytes"],
+                    "arrive_s": float(t),
+                    "priority": cfg["priority"],
+                })
+
+    # Sort each class list chronologically
+    for cls_name in arrivals:
+        arrivals[cls_name].sort(key=lambda p: p["arrive_s"])
+
+    return arrivals
+

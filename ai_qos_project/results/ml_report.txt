@@ -18,13 +18,13 @@ Accuracy: 1.0000
 weighted avg       1.00      1.00      1.00        72
 
 --- DummyClassifier (most_frequent) ---
-Accuracy: 0.3194
+Accuracy: 0.3056
               precision    recall  f1-score   support
 
-      normal       0.00      0.00      0.00        22
+      normal       0.31      1.00      0.47        22
     moderate       0.00      0.00      0.00        27
-      severe       0.32      1.00      0.48        23
+      severe       0.00      0.00      0.00        23
 
-    accuracy                           0.32        72
-   macro avg       0.11      0.33      0.16        72
-weighted avg       0.10      0.32      0.15        72
+    accuracy                           0.31        72
+   macro avg       0.10      0.33      0.16        72
+weighted avg       0.09      0.31      0.14        72

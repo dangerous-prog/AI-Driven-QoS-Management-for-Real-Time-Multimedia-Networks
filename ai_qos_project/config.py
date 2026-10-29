@@ -112,8 +112,59 @@ CONGESTION_LABELS = ["normal", "moderate", "severe"]
 TRAIN_FRACTION = 0.70
 
 # ---------------------------------------------------------------------------
-# Phase 2 extension hooks (placeholders — do not implement in Phase 1)
+# Phase 2 (Option B) — Closed-Loop Dynamic QoS & Control Loop
 # ---------------------------------------------------------------------------
-# DYNAMIC_QOS_ENABLED   = False   # set True in Phase 2
-# CONTROL_LOOP_INTERVAL = 1.0     # seconds between AI-driven adjustments
-# SDN_CONTROLLER_URL    = None    # Ryu REST API endpoint
+DYNAMIC_QOS_ENABLED    = True
+CONTROL_INTERVAL_S     = 1.0     # seconds per discrete control interval
+MIN_ACTION_DURATION_S  = 2.0     # hysteresis: minimum time before de-escalating action
+
+# QoS Actions available to the AI Controller
+QOS_ACTIONS = {
+    "NORMAL": {
+        "description": "Balanced / Fair sharing across all classes",
+        "voice_weight": 0.40,
+        "video_weight": 0.35,
+        "bg_weight":    0.25,
+        "mode": "weighted",
+    },
+    "PROTECT_REALTIME": {
+        "description": "Elevated real-time protection; bounded background share",
+        "voice_weight": 0.60,
+        "video_weight": 0.30,
+        "bg_weight":    0.10,
+        "mode": "weighted",
+    },
+    "SEVERE_CONGESTION": {
+        "description": "Strict priority for voice and video; background throttled",
+        "voice_weight": 0.70,
+        "video_weight": 0.25,
+        "bg_weight":    0.05,
+        "mode": "strict_priority",
+    },
+    "RECOVERY": {
+        "description": "Gradual transition from severe congestion back to normal",
+        "voice_weight": 0.50,
+        "video_weight": 0.30,
+        "bg_weight":    0.20,
+        "mode": "weighted",
+    },
+}
+
+# Changing-load profile for dynamic adaptation experiments:
+# (start_s, end_s, load_multiplier, label)
+CHANGING_LOAD_PROFILE = [
+    (0.0,  10.0, 1.5, "Low Load Phase"),
+    (10.0, 20.0, 4.2, "High Load Surge"),
+    (20.0, 30.0, 1.5, "Recovery / Low Load Phase"),
+]
+
+# Sustained congestion profile
+SUSTAINED_CONGESTION_PROFILE = [
+    (0.0, 30.0, 4.2, "Sustained High Congestion"),
+]
+
+# SDN Controller integration settings (optional / simulated adapter)
+SDN_CONTROLLER_URL     = "http://127.0.0.1:8080"  # default Ryu REST API endpoint
+SDN_SWITCH_DPID        = "0000000000000001"
+SDN_ENABLED            = False  # Set to True when a live Ryu controller is running
+

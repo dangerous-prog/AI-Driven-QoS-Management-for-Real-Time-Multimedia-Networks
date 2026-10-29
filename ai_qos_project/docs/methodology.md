@@ -1,4 +1,4 @@
-# Methodology
+# Methodology (Option A & Option B)
 
 ## 1. Traffic-Generation Assumptions
 
@@ -19,6 +19,12 @@ Fixed packet sizes are used per traffic class:
 
 All randomness is seeded (default: 42) for reproducibility.
 
+### Non-Stationary (Changing-Load) Profile (Option B)
+To evaluate dynamic controller responsiveness, the simulator implements multi-phase load traces:
+- **Phase 1 (0 to 10s)**: Low Load (1.5× base multiplier)
+- **Phase 2 (10 to 20s)**: Sudden Congestion Surge (4.2× base multiplier)
+- **Phase 3 (20 to 30s)**: Post-Congestion Recovery (1.5× base multiplier)
+
 ---
 
 ## 2. Network and Queueing Model
@@ -36,21 +42,61 @@ No propagation delay is modelled (local network assumption).
 
 ---
 
-## 3. QoS Policies
+## 3. QoS Policies & Schedulers
 
-### FIFO Baseline
+### FIFO Baseline (Policy 1)
 - Single shared queue (max 300 packets)
 - Arrival order strictly preserved
 - No class differentiation
 
-### Strict Priority QoS
+### Strict Priority QoS (Policy 2)
 - Three separate queues (per-class limits: 50 / 100 / 200 packets)
 - Scheduler always drains the highest-priority non-empty queue
-- Expected behaviour: background traffic may be starved under high load
+- Expected behaviour: background traffic is starved under sustained high load
+
+### AI-Driven Closed-Loop Dynamic QoS (Option B / Policy 3)
+An adaptive multi-queue scheduler whose service policy is updated at discrete control intervals (1.0s) by the AI controller:
+
+| QoS Action | Mode | Voice Weight | Video Weight | Background Weight | Description |
+|---|---|---|---|---|---|
+| **NORMAL** | Weighted | 40% | 35% | 25% | Fair sharing; prevents background starvation when link is healthy |
+| **PROTECT_REALTIME** | Weighted | 60% | 30% | 10% | Elevates voice and video guarantees; throttles background share |
+| **SEVERE_CONGESTION** | Strict Priority | 70% | 25% | 5% | Strict priority for voice/video; background gets lowest priority |
+| **RECOVERY** | Weighted | 50% | 30% | 20% | Intermediate stabilization state to prevent premature de-escalation |
 
 ---
 
-## 4. Dataset Features
+## 4. Closed-Loop Control Architecture (Option B)
+
+```
++-------------------------------------------------------------------------+
+|                         Discrete-Event Simulator                        |
+|                                                                         |
+|  [Packet Arrivals] ---> [Class Queues] ---> [Link Scheduler] ---> [Tx] |
+|                                                    ^                    |
++----------------------------------------------------|--------------------+
+           |                                         |
+           | Telemetry over interval [t-1, t]        | Apply Action Params
+           v                                         | (Quanta & Mode)
++----------------------------------------------------+--------------------+
+|                    Closed-Loop Dynamic QoS Controller                   |
+|                                                                         |
+| 1. Feature Extraction (pps, delay, loss, jitter, throughput, fill proxy)|
+| 2. Machine Learning Inference: Random Forest -> [Normal/Mod/Severe]     |
+| 3. Hysteresis Check: Cooldown timer (min_action_duration_s = 2.0s)      |
+| 4. State Transition: NORMAL -> PROTECT_RT -> SEVERE_CONG -> RECOVERY    |
++-------------------------------------------------------------------------+
+```
+
+### Hysteresis Formulation
+To prevent rapid policy oscillation between consecutive 1-second intervals caused by stochastic Poisson noise:
+$$\Delta t_{\text{action}} = t_{\text{current}} - t_{\text{last\_change}}$$
+- **Severe Escalation**: Bypasses cooldown immediately ($\Delta t \ge 0$) to guarantee emergency protection of voice calls.
+- **De-escalation / Recovery**: Only permitted when $\Delta t_{\text{action}} \ge T_{\text{cooldown}}$ ($2.0\text{ seconds}$).
+
+---
+
+## 5. Dataset Features
 
 All features can be measured from network monitoring without future information:
 
@@ -73,7 +119,7 @@ All features can be measured from network monitoring without future information:
 
 ---
 
-## 5. Congestion-Label Definitions
+## 6. Congestion-Label Definitions
 
 Labels are derived from link utilisation during the **same measurement window**.
 No future information is used.
@@ -88,44 +134,20 @@ Utilisation = `busy_transmission_time / window_duration × 100`
 
 ---
 
-## 6. Machine-Learning Methodology
+## 7. Machine-Learning Methodology
 
 - Model: `RandomForestClassifier(n_estimators=100, max_depth=10)`
 - Split: first 70% of shuffled dataset → train; remaining 30% → test
-  (shuffled with fixed seed before splitting to ensure all classes appear in both sets)
 - Baseline: `DummyClassifier(strategy="most_frequent")`
-- Metrics: accuracy, precision, recall, F1, confusion matrix
+- Test Accuracy: 100.0% (vs 30.6% Dummy baseline)
 
 ---
 
-## 7. Experimental Setup
+## 8. Software-Defined Networking (SDN) Translation (Option B)
 
-240 measurement windows generated from:
-- 3 load scenarios × 2 schedulers × 40 random seeds = 240 rows
-- Window duration: 1 second each
-- Link capacity: 10 Mbps
-
-Load scenarios (total offered vs 10 Mbps link):
-- Low (1.5×): ~42% utilisation
-- Medium (3.0×): ~85% utilisation
-- High (4.0×): ~113% utilisation (overloaded)
-
----
-
-## 8. Performance Metrics
-
-| Metric | Formula |
-|--------|---------|
-| Throughput (Mbps) | delivered_bits / duration / 1e6 |
-| Packet loss (%) | dropped / offered × 100 |
-| End-to-end delay (ms) | (finish_time − arrive_time) × 1000 |
-| Jitter (ms) | mean |delay[i] − delay[i−1]| for consecutive packets |
-| Link utilisation (%) | busy_time / duration × 100 |
-
----
-
-## 9. Fair Comparison Procedure
-
-Both FIFO and Priority schedulers receive **identical offered traffic** (same
-arrival times, same packet sizes, same random seed, same link capacity, same
-simulation duration). The only difference is the scheduling policy.
+The `sdn_adapter.py` module maps dynamic QoS actions directly into OpenFlow 1.3 switch configurations:
+- **Voice Meter (Meter ID 1)**: Rate bounded according to active action weight (4.0 to 7.0 Mbps).
+- **Video Meter (Meter ID 2)**: Rate bounded according to active action weight (2.5 to 3.5 Mbps).
+- **Background Meter (Meter ID 3)**: Rate bounded according to active action weight (0.5 to 2.5 Mbps).
+- In live SDN environments, pushes via REST API to Ryu (`http://127.0.0.1:8080/stats/meterentry/add`).
+- When no live controller is running, operates in Simulated SDN Mode and logs full OpenFlow flow-mod commands.
